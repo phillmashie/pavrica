@@ -4,6 +4,37 @@ const router = express.Router();
 
 const connection = require("../pavricadb/pavricadb");
 
+class IdDetails {
+  constructor(idNumber, idType) {
+    this.idNumber = idNumber;
+    this.idType = idType;
+  }
+}
+
+class AddressDetails {
+  constructor(address1, address2, address3, postalCode, country) {
+    this.address1 = address1;
+    this.address2 = address2;
+    this.address3 = address3;
+    this.postalCode = postalCode;
+    this.country = country;
+  }
+}
+
+class Country {
+  constructor(countryCode) {
+    this.countryCode = countryCode;
+  }
+}
+
+class Network {
+  constructor(id) {
+    this.id = id;
+  }
+}
+
+// ... Other classes and functions ...
+
 function getBasicAuthorizationHeader(username, password) {
   const authString = `${username}:${password}`;
   const base64AuthString = Buffer.from(authString).toString("base64");
@@ -18,35 +49,36 @@ async function retrieveCredentialsFromDatabase() {
     return queryResult.rows[0];
   } catch (error) {
     console.error("Error retrieving credentials:", error);
-    return null;
+    throw error;
   }
 }
 
 async function saveRicaDetailsToDatabase(ricaData) {
   try {
     await connection.query(
-      "INSERT INTO pavrica.tblpavrica (responseCode, ricaReference, agentId, firstName, surname, idDetails, registrationType, subscriberId, last4Iccid, residentialAddress, previousIdNumber, previousIdType, network, businessOwnerIdDetails, altContactNumber, ricaDate) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
+      'INSERT INTO pavrica.tblpavrica ("responseCode", "ricaReference", "agentId", "firstName", surname, "idDetails", "registrationType", "subscriberId", "last4Iccid", "residentialAddress", "previousIdNumber", "previousIdType", network, "businessOwnerIdDetails", "altContactNumber", "ricaDate") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)',
       [
         ricaData.responseCode,
         ricaData.ricaReference,
         ricaData.agentId,
         ricaData.firstName,
         ricaData.surname,
-        ricaData.idDetails,
+        JSON.stringify(ricaData.idDetails),
         ricaData.registrationType,
         ricaData.subscriberId,
         ricaData.last4Iccid,
-        ricaData.residentialAddress,
+        JSON.stringify(ricaData.residentialAddress),
         ricaData.previousIdNumber,
         ricaData.previousIdType,
-        ricaData.network,
-        ricaData.businessOwnerIdDetails,
+        JSON.stringify(ricaData.network),
+        JSON.stringify(ricaData.businessOwnerIdDetails),
         ricaData.altContactNumber,
         new Date(),
       ]
     );
   } catch (error) {
     console.error("Error saving RICA details:", error);
+    throw error;
   }
 }
 
@@ -58,38 +90,70 @@ router.post("/smartrica", async (req, res) => {
       return res.status(500).json({ error: "Credentials not found" });
     }
 
+    const authURL = "https://test.smartcall.co.za:8101/webservice/auth";
     const authHeader = getBasicAuthorizationHeader(
       credentials.smartricausername,
       credentials.smartricapassword
     );
 
-    const [authResponse, registrationResponse] = await Promise.all([
-      axios.post(
-        "https://test.smartcall.co.za:8101/webservice/auth",
-        {},
-        {
-          headers: {
-            Authorization: authHeader,
-          },
-        }
-      ),
-      axios.post(
-        "https://test.smartcall.co.za:8101/webservice/smartrica/registration",
-        req.body,
-        {
-          headers: {
-            Authorization: authHeader,
-          },
-        }
-      ),
-    ]);
+    console.log("Sending authentication request...");
 
-    if (authResponse.data.responseCode !== "Success") {
-      return res.status(500).json({ error: "Authentication failed" });
-    }
+    const authResponse = await axios.post(
+      authURL,
+      {},
+      {
+        headers: {
+          Authorization: authHeader,
+        },
+      }
+    );
+
+    console.log("Authentication Test Response: successful");
+
+    console.log("Sending registration request...");
+
+    const registrationURL =
+      "https://test.smartcall.co.za:8101/webservice/smartrica/registrations";
+
+    const registrationRequest = {
+      agentId: req.body.agentId,
+      firstName: req.body.firstName,
+      surname: req.body.surname,
+      idDetails: new IdDetails(
+        req.body.idDetails.idNumber,
+        req.body.idDetails.idType
+      ),
+      registrationType: req.body.registrationType,
+      subscriberId: req.body.subscriberId,
+      last4Iccid: req.body.last4Iccid,
+      residentialAddress: new AddressDetails(
+        req.body.residentialAddress.address1,
+        req.body.residentialAddress.address2,
+        req.body.residentialAddress.address3,
+        req.body.residentialAddress.postalCode,
+        new Country(req.body.residentialAddress.country) // Create a Country object
+      ),
+      previousIdNumber: req.body.previousIdNumber,
+      previousIdType: req.body.previousIdType,
+      network: new Network(req.body.network.id), // Create a Network object
+      businessOwnerIdDetails: req.body.businessOwnerIdDetails,
+      altContactNumber: req.body.altContactNumber,
+    };
+
+    const registrationResponse = await axios.post(
+      registrationURL,
+      registrationRequest,
+      {
+        headers: {
+          Authorization: `Bearer ${authResponse.data.accessToken}`,
+        },
+      }
+    );
+
+    console.log("Registration response received:", registrationResponse.data);
 
     if (registrationResponse.data.responseCode !== "Success") {
-      return res.status(500).json({ error: "SmartRICA registration failed" });
+      return res.status(400).json({ error: "SmartRICA registration failed" });
     }
 
     const ricaData = {
@@ -113,6 +177,3 @@ router.post("/smartrica", async (req, res) => {
 });
 
 module.exports = router;
-
-// https://test.smartcall.co.za:8101/webservice/smartrica/registration
-// https://test.smartcall.co.za:8101/webservice/auth
