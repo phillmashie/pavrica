@@ -5,9 +5,10 @@ const router = express.Router();
 const connection = require("../pavricadb/pavricadb");
 
 class IdDetails {
-  constructor(idNumber, idType) {
+  constructor(idNumber, idType, passportExpiryDate) {
     this.idNumber = idNumber;
     this.idType = idType;
+    this.passportExpiryDate = passportExpiryDate; // Add passportExpiryDate property
   }
 }
 
@@ -121,7 +122,8 @@ router.post("/smartrica", async (req, res) => {
       surname: req.body.surname,
       idDetails: new IdDetails(
         req.body.idDetails.idNumber,
-        req.body.idDetails.idType
+        req.body.idDetails.idType,
+        req.body.idDetails.passportExpiryDate // Add passportExpiryDate to idDetails
       ),
       registrationType: req.body.registrationType,
       subscriberId: req.body.subscriberId,
@@ -131,15 +133,27 @@ router.post("/smartrica", async (req, res) => {
         req.body.residentialAddress.address2,
         req.body.residentialAddress.address3,
         req.body.residentialAddress.postalCode,
-        new Country(req.body.residentialAddress.country) // Create a Country object
+        new Country(req.body.residentialAddress.country)
       ),
       previousIdNumber: req.body.previousIdNumber,
       previousIdType: req.body.previousIdType,
-      network: new Network(req.body.network.id), // Create a Network object
+      network: new Network(req.body.network.id),
       businessOwnerIdDetails: req.body.businessOwnerIdDetails,
       altContactNumber: req.body.altContactNumber,
     };
 
+    // Add a check for passport idType and validate the passportExpiryDate
+    if (
+      registrationRequest.idDetails.idType === "passport" &&
+      !registrationRequest.idDetails.passportExpiryDate
+    ) {
+      return res.status(400).json({
+        error: "Validation error: No passport expiry date provided",
+        code: 1010,
+      });
+    }
+
+    // If the check passes, proceed with the registration request
     const registrationResponse = await axios.post(
       registrationURL,
       registrationRequest,
