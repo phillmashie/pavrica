@@ -5,10 +5,11 @@ const router = express.Router();
 const connection = require("../pavricadb/pavricadb");
 
 class IdDetails {
-  constructor(idNumber, idType, passportExpiryDate) {
+  constructor(idNumber, idType, passportExpiryDate, idNationality) {
     this.idNumber = idNumber;
     this.idType = idType;
-    this.passportExpiryDate = passportExpiryDate; // Add passportExpiryDate property
+    this.passportExpiryDate = passportExpiryDate;
+    this.idNationality = idNationality;
   }
 }
 
@@ -123,7 +124,8 @@ router.post("/smartrica", async (req, res) => {
       idDetails: new IdDetails(
         req.body.idDetails.idNumber,
         req.body.idDetails.idType,
-        req.body.idDetails.passportExpiryDate // Add passportExpiryDate to idDetails
+        req.body.idDetails.passportExpiryDate,
+        req.body.idDetails.idNationality
       ),
       registrationType: req.body.registrationType,
       subscriberId: req.body.subscriberId,
