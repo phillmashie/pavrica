@@ -1,6 +1,7 @@
 const express = require("express");
 const axios = require("axios");
 const router = express.Router();
+require("dotenv").config();
 
 const connection = require("../pavricadb/pavricadb");
 
@@ -35,22 +36,50 @@ class Network {
   }
 }
 
-// ... Other classes and functions ...
+// ... (existing functions and classes)
 
-function getBasicAuthorizationHeader(username, password) {
-  const authString = `${username}:${password}`;
-  const base64AuthString = Buffer.from(authString).toString("base64");
-  return `Basic ${base64AuthString}`;
-}
+let accessToken = null;
+let tokenExpirationTime = 0;
 
-async function retrieveCredentialsFromDatabase() {
+async function authenticateAndGetToken() {
+  if (accessToken && Date.now() < tokenExpirationTime) {
+    console.log("Reusing existing token.");
+    return accessToken;
+  }
+
   try {
-    const queryResult = await connection.query(
-      "SELECT smartricausername, smartricapassword FROM pavrica.tblpavricacredentials WHERE id = 1"
+    const credentials = await retrieveCredentialsFromDatabase();
+
+    if (!credentials) {
+      throw new Error("Credentials not found");
+    }
+
+    const authURL = process.env.SMARTCALL_PRODAUTH;
+    const authHeader = getBasicAuthorizationHeader(
+      credentials.smartricausername,
+      credentials.smartricapassword
     );
-    return queryResult.rows[0];
+
+    console.log("Fetching a new access token...");
+
+    const authResponse = await axios.post(
+      authURL,
+      {},
+      {
+        headers: {
+          Authorization: authHeader,
+        },
+      }
+    );
+
+    console.log("Authentication Response: successful");
+
+    accessToken = authResponse.data.accessToken;
+    tokenExpirationTime = Date.now() + authResponse.data.expiresIn * 1000;
+
+    return accessToken;
   } catch (error) {
-    console.error("Error retrieving credentials:", error);
+    console.error("Error fetching access token:", error);
     throw error;
   }
 }
@@ -84,38 +113,39 @@ async function saveRicaDetailsToDatabase(ricaData) {
   }
 }
 
+async function performRegistrationRequest(
+  registrationURL,
+  registrationRequest,
+  token
+) {
+  try {
+    const response = await axios.post(registrationURL, registrationRequest, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    console.log("Registration response received:", response.data);
+
+    return response;
+  } catch (error) {
+    console.error("Error in registration request:", error);
+    throw error;
+  }
+}
+
 router.post("/smartrica", async (req, res) => {
   try {
-    const credentials = await retrieveCredentialsFromDatabase();
+    const token = await authenticateAndGetToken();
 
-    if (!credentials) {
-      return res.status(500).json({ error: "Credentials not found" });
+    if (!token) {
+      return res.status(500).json({ error: "Unable to fetch access token" });
     }
 
-    const authURL = "https://test.smartcall.co.za:8101/webservice/auth";
-    const authHeader = getBasicAuthorizationHeader(
-      credentials.smartricausername,
-      credentials.smartricapassword
-    );
-
-    console.log("Sending authentication request...");
-
-    const authResponse = await axios.post(
-      authURL,
-      {},
-      {
-        headers: {
-          Authorization: authHeader,
-        },
-      }
-    );
-
-    console.log("Authentication Test Response: successful");
-
-    console.log("Sending registration request...");
-
-    const registrationURL =
-      "https://test.smartcall.co.za:8101/webservice/smartrica/registrations";
+    const registrationURLs = [
+      process.env.SMARTCALL_PRODRICAREGENV1,
+      process.env.SMARTCALL_PRODRICAREGENV2,
+    ];
 
     const registrationRequest = {
       agentId: req.body.agentId,
@@ -144,7 +174,6 @@ router.post("/smartrica", async (req, res) => {
       altContactNumber: req.body.altContactNumber,
     };
 
-    // Add a check for passport idType and validate the passportExpiryDate
     if (
       registrationRequest.idDetails.idType === "passport" &&
       !registrationRequest.idDetails.passportExpiryDate
@@ -155,20 +184,27 @@ router.post("/smartrica", async (req, res) => {
       });
     }
 
-    // If the check passes, proceed with the registration request
-    const registrationResponse = await axios.post(
-      registrationURL,
-      registrationRequest,
-      {
-        headers: {
-          Authorization: `Bearer ${authResponse.data.accessToken}`,
-        },
+    let registrationResponse = null;
+
+    for (const url of registrationURLs) {
+      try {
+        registrationResponse = await performRegistrationRequest(
+          url,
+          registrationRequest,
+          token
+        );
+        if (registrationResponse.data.responseCode === "Success") {
+          break;
+        }
+      } catch (error) {
+        console.error(`Failed registration attempt for ${url}`);
       }
-    );
+    }
 
-    console.log("Registration response received:", registrationResponse.data);
-
-    if (registrationResponse.data.responseCode !== "Success") {
+    if (
+      !registrationResponse ||
+      registrationResponse.data.responseCode !== "Success"
+    ) {
       return res.status(400).json({ error: "SmartRICA registration failed" });
     }
 
