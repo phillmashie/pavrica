@@ -1,6 +1,7 @@
 const express = require("express");
 const axios = require("axios");
 const router = express.Router();
+const storage = require("node-persist");
 require("dotenv").config();
 
 const connection = require("../pavricadb/pavricadb");
@@ -36,10 +37,11 @@ class Network {
   }
 }
 
-// ... (existing functions and classes)
-
 let accessToken = null;
 let tokenExpirationTime = 0;
+
+// Initialize storage
+storage.initSync();
 
 async function authenticateAndGetToken() {
   if (accessToken && Date.now() < tokenExpirationTime) {
@@ -77,11 +79,23 @@ async function authenticateAndGetToken() {
     accessToken = authResponse.data.accessToken;
     tokenExpirationTime = Date.now() + authResponse.data.expiresIn * 1000;
 
+    // Store the token securely
+    storage.setItemSync("accessToken", accessToken);
+    storage.setItemSync("tokenExpirationTime", tokenExpirationTime);
+
     return accessToken;
   } catch (error) {
     console.error("Error fetching access token:", error);
     throw error;
   }
+}
+
+function getStoredToken() {
+  return storage.getItemSync("accessToken");
+}
+
+function getStoredTokenExpirationTime() {
+  return storage.getItemSync("tokenExpirationTime");
 }
 
 async function saveRicaDetailsToDatabase(ricaData) {
@@ -136,10 +150,15 @@ async function performRegistrationRequest(
 
 router.post("/smartrica", async (req, res) => {
   try {
-    const token = await authenticateAndGetToken();
+    const storedToken = getStoredToken();
+    const storedTokenExpirationTime = getStoredTokenExpirationTime();
 
-    if (!token) {
-      return res.status(500).json({ error: "Unable to fetch access token" });
+    if (storedToken && Date.now() < storedTokenExpirationTime) {
+      accessToken = storedToken;
+      tokenExpirationTime = storedTokenExpirationTime;
+      console.log("Using stored token.");
+    } else {
+      accessToken = await authenticateAndGetToken();
     }
 
     const registrationURLs = [
@@ -191,7 +210,7 @@ router.post("/smartrica", async (req, res) => {
         registrationResponse = await performRegistrationRequest(
           url,
           registrationRequest,
-          token
+          accessToken
         );
         if (registrationResponse.data.responseCode === "Success") {
           break;
